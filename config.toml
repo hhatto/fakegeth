@@ -1,0 +1,10 @@
+[http]
+host = "localhost"
+port = 8545
+
+[websocket]
+host = "localhost"
+port = 8545
+
+[ipc]
+path = "./fakegeth.ipc"

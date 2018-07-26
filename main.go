@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 
 	"github.com/gorilla/websocket"
 )
@@ -74,12 +75,30 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// signal handle
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	// load config
+	var config *Config
+	var err error
+	if len(os.Args) >= 2 {
+		config, err = LoadConfig(os.Args[1])
+		if err != nil {
+			log.Printf("read config error: %v", err)
+			return
+		}
+	}
+	log.Printf("config: %v", config)
+
+	// listen http
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
 	httpAddr := ":8545"
 	log.Printf("listen http, endpoint: %v", httpAddr)
 	go http.ListenAndServe(httpAddr, mux)
 
+	// listen ipc
 	endpoint := "./fakegeth.ipc"
 	os.Remove(endpoint)
 	log.Printf("listen ipc, endpoint: %v", endpoint)
@@ -89,6 +108,7 @@ func main() {
 		return
 	}
 	os.Chmod(endpoint, 0600)
+	defer os.Remove(endpoint)
 	go func() {
 		for {
 			conn, err := l.Accept()
@@ -108,9 +128,14 @@ func main() {
 		}
 	}()
 
+	// listen websocket
 	wsAddr := ":8546"
 	log.Printf("listen websocket, endpoint: %v", wsAddr)
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/", websocketHandler)
-	http.ListenAndServe(wsAddr, wsMux)
+	go http.ListenAndServe(wsAddr, wsMux)
+
+	// wait signal
+	_ = <-c
+	log.Println("stop")
 }
