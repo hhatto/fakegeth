@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"encoding/json"
 	"log"
 	"net"
 	"os"
@@ -34,13 +34,18 @@ func (s *IPCServer) ListenAndServe() {
 			}
 			defer conn.Close()
 
-			buf, err := bufio.NewReader(conn).ReadString('}')
+			//buf, err := bufio.NewReader(conn).ReadString('}')
 			if err != nil {
 				log.Printf("ipc read error: %v", err)
 				return
 			}
 
-			log.Printf("ipc read, %d bytes. recvmsg: %v", len(buf), string(buf))
+			decoder := json.NewDecoder(conn)
+			var t RPCRequest
+			if err := decoder.Decode(&t); err != nil {
+				panic(err)
+			}
+			log.Printf("ipc: id=%v, method=%v, params=%v", t.Id, t.Method, t.Params)
 		}
 	}()
 }

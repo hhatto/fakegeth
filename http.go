@@ -29,7 +29,9 @@ func (s *HTTPServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	log.Printf("method: %v, user-agent: %v, body: %v", r.Method, r.Header["User-Agent"], t)
+	log.Printf("http: user-agent=%v, id=%v, method=%v, params=%v",
+		r.Header["User-Agent"], t.Id, t.Method, t.Params)
+
 	resJson := RPCResponse{
 		Id:      t.Id,
 		Jsonrpc: "2.0",

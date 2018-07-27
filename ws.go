@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"log"
 	"net/http"
 )
@@ -35,7 +37,14 @@ func (s *WebsocketServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("read error: %v", err)
 			break
 		}
-		log.Printf("recvmsg: %v", string(msg))
+
+		buf := bytes.NewBuffer(msg)
+		decoder := json.NewDecoder(buf)
+		var t RPCRequest
+		if err := decoder.Decode(&t); err != nil {
+			panic(err)
+		}
+		log.Printf("ws: id=%v, method=%v, params=%v", t.Id, t.Method, t.Params)
 
 		err = c.WriteMessage(mt, msg)
 		if err != nil {
