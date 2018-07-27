@@ -19,9 +19,9 @@ type IPCInfo struct {
 }
 
 type Config struct {
-	Http      HTTPInfo
-	Websocket WebsocketInfo
-	Ipc       IPCInfo
+	Http      *HTTPInfo
+	Websocket *WebsocketInfo
+	Ipc       *IPCInfo
 }
 
 func LoadConfig(path string) (*Config, error) {

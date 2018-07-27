@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
+	"context"
+	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -33,109 +34,95 @@ type RPCResponse struct {
 
 var upgrader = websocket.Upgrader{}
 
-func indexHandler(w http.ResponseWriter, r *http.Request) {
-	decoder := json.NewDecoder(r.Body)
-	var t RPCRequest
-	if err := decoder.Decode(&t); err != nil {
-		panic(err)
-	}
+func serveHTTP(config *Config, wg *sync.WaitGroup, stop <-chan struct{}) {
+	addr := fmt.Sprintf("%s:%d", config.Http.Host, config.Http.Port)
+	log.Printf("listen http, endpoint: %v", addr)
+	ss := NewHTTPServer()
+	s := &http.Server{Addr: addr, Handler: ss}
+	go s.ListenAndServe()
 
-	log.Printf("method: %v, user-agent: %v, body: %v", r.Method, r.Header["User-Agent"], t)
-	resJson := RPCResponse{
-		Id:      t.Id,
-		Jsonrpc: "2.0",
-		Result:  "ok",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resJson)
+	go func() {
+		wg.Add(1)
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		s.Shutdown(ctx)
+		log.Println("stop http")
+		wg.Done()
+	}()
 }
 
-func websocketHandler(w http.ResponseWriter, r *http.Request) {
-	c, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("websocket upgrade: %v", err)
-		return
-	}
-	defer c.Close()
+func serveWebsocket(config *Config, wg *sync.WaitGroup, stop <-chan struct{}) {
+	addr := fmt.Sprintf("%s:%d", config.Websocket.Host, config.Websocket.Port)
+	log.Printf("listen websocket, endpoint: %v", addr)
+	ss := NewWebsocketServer()
+	s := &http.Server{Addr: addr, Handler: ss}
+	go s.ListenAndServe()
 
-	for {
-		mt, msg, err := c.ReadMessage()
-		if err != nil {
-			log.Printf("read error: %v", err)
-			break
-		}
-		log.Printf("recvmsg: %v", string(msg))
+	go func() {
+		wg.Add(1)
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		s.Shutdown(ctx)
+		log.Println("stop websocket")
+		wg.Done()
+	}()
+}
 
-		err = c.WriteMessage(mt, msg)
-		if err != nil {
-			log.Printf("write error: %v", err)
-			break
-		}
-	}
+func serveIPC(config *Config, wg *sync.WaitGroup, stop <-chan struct{}) {
+	endpoint := config.Ipc.Path
+	s := NewIPCServer(endpoint)
+	go s.ListenAndServe()
+
+	go func() {
+		wg.Add(1)
+		<-stop
+		s.Shutdown()
+		log.Println("stop ipc")
+		wg.Done()
+	}()
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("usage: fakegeth CONFFILE")
+		return
+	}
+
 	// signal handle
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
 	// load config
-	var config *Config
-	var err error
-	if len(os.Args) >= 2 {
-		config, err = LoadConfig(os.Args[1])
-		if err != nil {
-			log.Printf("read config error: %v", err)
-			return
-		}
-	}
-	log.Printf("config: %v", config)
-
-	// listen http
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", indexHandler)
-	httpAddr := ":8545"
-	log.Printf("listen http, endpoint: %v", httpAddr)
-	go http.ListenAndServe(httpAddr, mux)
-
-	// listen ipc
-	endpoint := "./fakegeth.ipc"
-	os.Remove(endpoint)
-	log.Printf("listen ipc, endpoint: %v", endpoint)
-	l, err := net.Listen("unix", endpoint)
+	config, err := LoadConfig(os.Args[1])
 	if err != nil {
-		log.Printf("uds:%s listen error: %v", endpoint, err)
+		log.Printf("read config error: %v", err)
 		return
 	}
-	os.Chmod(endpoint, 0600)
-	defer os.Remove(endpoint)
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				log.Printf("ipc accept error: %v", err)
-				return
-			}
-			defer conn.Close()
+	log.Printf("config: %v, %v, %v", config.Http, config.Websocket, config.Ipc)
 
-			buf, err := bufio.NewReader(conn).ReadString('}')
-			if err != nil {
-				log.Printf("ipc read error: %v", err)
-				return
-			}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	// listen http
+	if config != nil && config.Http != nil {
+		go serveHTTP(config, &wg, stop)
+	}
 
-			log.Printf("ipc read, %d bytes. recvmsg: %v", len(buf), string(buf))
-		}
-	}()
+	// listen ipc
+	if config != nil && config.Ipc != nil {
+		go serveIPC(config, &wg, stop)
+	}
 
 	// listen websocket
-	wsAddr := ":8546"
-	log.Printf("listen websocket, endpoint: %v", wsAddr)
-	wsMux := http.NewServeMux()
-	wsMux.HandleFunc("/", websocketHandler)
-	go http.ListenAndServe(wsAddr, wsMux)
+	if config != nil && config.Websocket != nil {
+		serveWebsocket(config, &wg, stop)
+	}
 
 	// wait signal
 	_ = <-c
+
+	close(stop)
+	wg.Wait()
 	log.Println("stop")
 }
