@@ -4,7 +4,7 @@ port = 8545
 
 [websocket]
 host = "localhost"
-port = 8545
+port = 8546
 
 [ipc]
 path = "./fakegeth.ipc"
